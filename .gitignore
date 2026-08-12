@@ -1,0 +1,7 @@
+# Compiled binaries
+day1-hello-kernels/vector_add
+
+# Python
+__pycache__/
+*.pyc
+.venv/
