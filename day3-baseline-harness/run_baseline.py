@@ -14,10 +14,12 @@ import csv
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.expanduser("~/kernelbench-journal"))
 
 import torch
 
 from harness import check_correctness, benchmark_fn, load_model_class
+from day4_triton_softmax.triton_softmax import softmax_triton  # adjust import path as needed
 
 REPO_ROOT = os.path.expanduser("~/KernelBench")
 SOFTMAX_PATH = os.path.join(REPO_ROOT, "KernelBench", "level1", "23_Softmax.py")
@@ -60,6 +62,19 @@ def run_op(op_name, problem_id, filepath, size_label_fn, input_fn, sizes):
             "variant": "torch.compile", "passed": passed_compiled, "max_abs_diff": diff_compiled,
             **compiled_stats,
         })
+
+        # Triton
+        if op_name == "softmax":
+            passed_triton, diff_triton = check_correctness(softmax_triton, reference_fn, inputs)
+            triton_stats = benchmark_fn(softmax_triton, inputs, WARMUP, ITERS)
+            rows.append({
+                "op": op_name, "problem_id": problem_id, "size": size_label_fn(size),
+                "variant": "triton", "passed": passed_triton, "max_abs_diff": diff_triton,
+                **triton_stats,
+        })
+            print(f"{op_name} [{size_label_fn(size)}] triton: passed={passed_triton} "
+                f"median={triton_stats['median_ms']:.3f}ms")
+        
         print(f"{op_name} {label}: eager={eager_stats['median_ms']:.3f}ms "
               f"compiled={compiled_stats['median_ms']:.3f}ms (compiled passed={passed_compiled})")
 
