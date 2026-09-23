@@ -4,4 +4,6 @@ day1-hello-kernels/vector_add
 # Python
 __pycache__/
 *.pyc
-.venv/*.ncu.rep
+.venv/
+.venv/
+*.ncu-rep
