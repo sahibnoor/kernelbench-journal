@@ -11,8 +11,8 @@ def matmul_kernel(
     stride_bk, stride_bn,
     stride_cm, stride_cn,
     BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    INPUT_PRECISION: tl.constexpr,
 ):
-    # Each program computes one BLOCK_M x BLOCK_N tile of C.
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
 
@@ -30,7 +30,7 @@ def matmul_kernel(
         b_mask = (offs_k[:, None] + k < K) & (offs_n[None, :] < N)
         a = tl.load(a_ptrs, mask=a_mask, other=0.0)
         b = tl.load(b_ptrs, mask=b_mask, other=0.0)
-        acc = tl.dot(a, b, acc, input_precision="ieee")
+        acc = tl.dot(a, b, acc, input_precision=INPUT_PRECISION)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
 
@@ -42,8 +42,14 @@ def matmul_kernel(
 def matmul_triton(
     a: torch.Tensor, b: torch.Tensor,
     BLOCK_M: int = 64, BLOCK_N: int = 64, BLOCK_K: int = 32,
+    input_precision: str = "ieee",
 ) -> torch.Tensor:
-    """Square/rectangular matmul: a (M,K) @ b (K,N) -> c (M,N), matching torch.matmul."""
+    """Square/rectangular matmul: a (M,K) @ b (K,N) -> c (M,N), matching torch.matmul.
+
+    input_precision: "ieee" (full fp32, no tensor cores) or "tf32"
+    (tensor-core-accelerated, reduced mantissa -- same tradeoff cuBLAS
+    makes by default on Ampere).
+    """
     assert a.ndim == 2 and b.ndim == 2 and a.shape[1] == b.shape[0]
     assert a.is_cuda and b.is_cuda
     M, K = a.shape
@@ -59,6 +65,7 @@ def matmul_triton(
         b.stride(0), b.stride(1),
         c.stride(0), c.stride(1),
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, BLOCK_K=BLOCK_K,
+        INPUT_PRECISION=input_precision,
     )
     return c
 
@@ -69,11 +76,12 @@ if __name__ == "__main__":
         a = torch.randn(size, size, device="cuda", dtype=torch.float32)
         b = torch.randn(size, size, device="cuda", dtype=torch.float32)
 
-        out = matmul_triton(a, b)
-        ref = torch.matmul(a, b)
-        err = (out - ref).abs().max().item()
-        ok = torch.allclose(out, ref, atol=1e-2, rtol=1e-2)
-        print(f"size={size} max_abs_err={err:.3e} {'OK' if ok else 'FAIL'}")
+        for prec, tol in [("ieee", dict(atol=1e-3, rtol=1e-3)), ("tf32", dict(atol=5e-1, rtol=5e-2))]:
+            out = matmul_triton(a, b, BLOCK_M=128, BLOCK_N=64, BLOCK_K=32, input_precision=prec)
+            ref = torch.matmul(a, b)
+            err = (out - ref).abs().max().item()
+            ok = torch.allclose(out, ref, **tol)
+            print(f"size={size} precision={prec} max_abs_err={err:.3e} {'OK' if ok else 'FAIL'}")
 
         del a, b, out, ref
         torch.cuda.empty_cache()
